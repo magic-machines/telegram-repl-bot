@@ -1,0 +1,10 @@
+fastapi
+uvicorn
+python-telegram-bot
+python-dotenv
+httpx
+requests
+python-multipart
+pytesseract
+Pillow
+openai-whisper
