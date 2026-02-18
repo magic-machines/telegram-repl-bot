@@ -1,3 +1,6 @@
 ruff
 mypy
 types-requests
+pytest
+pytest-asyncio
+anyio[trio]
