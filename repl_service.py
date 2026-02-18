@@ -3,7 +3,7 @@ from __future__ import annotations
 import uuid
 from dataclasses import dataclass
 from pathlib import Path
-from typing import TypeVar, Generic, Callable, TypeAlias, Any
+from typing import TypeVar, Generic, Callable, TypeAlias
 import functools
 
 from fastapi import FastAPI, UploadFile, File, HTTPException
