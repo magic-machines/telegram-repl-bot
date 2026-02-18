@@ -107,15 +107,26 @@ async def ocr(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
             await update.message.reply_text(f"OCR failed: {e}")
 
 
+HELP_TEXT = (
+    "Available commands:\n\n"
+    "/hello — check if the REPL service is up\n"
+    "/ocr — extract text from your last uploaded photo\n"
+    "/transcribe — transcribe your last voice message\n"
+    "/help — show this help message\n"
+    "/start — show this help message\n\n"
+    "To use OCR: send a photo, then run /ocr\n"
+    "To transcribe: send a voice message, then run /transcribe"
+)
+
+
+async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    assert update.message is not None
+    await update.message.reply_text(HELP_TEXT)
+
+
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     assert update.message is not None
-    await update.message.reply_text(
-        "Hello! Available commands:\n\n"
-        "/hello — check if the REPL service is up\n"
-        "/ocr — extract text from your last uploaded photo\n"
-        "/transcribe — transcribe your last voice message\n"
-        "/start — show this message"
-    )
+    await update.message.reply_text("Hello! " + HELP_TEXT)
 
 
 def main() -> None:
@@ -123,6 +134,7 @@ def main() -> None:
     app.add_handler(CommandHandler("hello", hello))
     app.add_handler(CommandHandler("ocr", ocr))
     app.add_handler(CommandHandler("transcribe", transcribe))
+    app.add_handler(CommandHandler("help", help_command))
     app.add_handler(CommandHandler("start", start))
     app.add_handler(MessageHandler(filters.PHOTO, handle_photo))
     app.add_handler(MessageHandler(filters.VOICE, handle_voice))
