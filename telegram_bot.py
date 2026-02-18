@@ -14,6 +14,7 @@ last_audio: dict[int, str] = {}
 
 
 async def hello(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    assert update.message is not None
     async with httpx.AsyncClient(timeout=5) as client:
         try:
             response = await client.get(f"{REPL_URL}/health")
@@ -25,6 +26,8 @@ async def hello(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
 
 
 async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    assert update.message is not None
+    assert update.message.from_user is not None
     photo = update.message.photo[-1]  # largest available size
     file = await context.bot.get_file(photo.file_id)
     photo_bytes = await file.download_as_bytearray()
@@ -46,6 +49,9 @@ async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
 
 
 async def handle_voice(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    assert update.message is not None
+    assert update.message.voice is not None
+    assert update.message.from_user is not None
     file = await context.bot.get_file(update.message.voice.file_id)
     audio_bytes = await file.download_as_bytearray()
 
@@ -66,6 +72,8 @@ async def handle_voice(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
 
 
 async def transcribe(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    assert update.message is not None
+    assert update.message.from_user is not None
     audio_id = last_audio.get(update.message.from_user.id)
     if not audio_id:
         await update.message.reply_text("No voice message uploaded yet. Send a voice message first.")
@@ -82,6 +90,8 @@ async def transcribe(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
 
 
 async def ocr(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    assert update.message is not None
+    assert update.message.from_user is not None
     photo_id = last_photo.get(update.message.from_user.id)
     if not photo_id:
         await update.message.reply_text("No photo uploaded yet. Send a photo first.")
@@ -98,6 +108,7 @@ async def ocr(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
 
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    assert update.message is not None
     await update.message.reply_text(
         "Hello! Available commands:\n\n"
         "/hello — check if the REPL service is up\n"
@@ -105,7 +116,6 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         "/transcribe — transcribe your last voice message\n"
         "/start — show this message"
     )
-
 
 
 def main() -> None:
