@@ -103,9 +103,27 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         "/hello — check if the REPL service is up\n"
         "/ocr — extract text from your last uploaded photo\n"
         "/transcribe — transcribe your last voice message\n"
+        "/help — show detailed usage instructions\n"
         "/start — show this message"
     )
 
+
+async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    await update.message.reply_text(
+        "Here's how to use this bot:\n\n"
+        "📷 *Photo OCR*\n"
+        "1. Send a photo to the bot\n"
+        "2. Use /ocr to extract text from it\n\n"
+        "🎤 *Audio Transcription*\n"
+        "1. Send a voice message to the bot\n"
+        "2. Use /transcribe to get the transcription\n\n"
+        "🔧 *Other Commands*\n"
+        "/hello — check if the backend service is reachable\n"
+        "/start — show the command list\n"
+        "/help — show this help message\n\n"
+        "Note: Only your most recently uploaded photo or voice message is stored per session.",
+        parse_mode="Markdown",
+    )
 
 
 def main() -> None:
@@ -114,6 +132,7 @@ def main() -> None:
     app.add_handler(CommandHandler("ocr", ocr))
     app.add_handler(CommandHandler("transcribe", transcribe))
     app.add_handler(CommandHandler("start", start))
+    app.add_handler(CommandHandler("help", help_command))
     app.add_handler(MessageHandler(filters.PHOTO, handle_photo))
     app.add_handler(MessageHandler(filters.VOICE, handle_voice))
     print("Bot is running. Press Ctrl+C to stop.")
