@@ -1,111 +1,170 @@
+from __future__ import annotations
+
 import os
+from dataclasses import dataclass
+from typing import TypeVar, Generic, Callable, Awaitable
+
 import httpx
 from dotenv import load_dotenv
 from telegram import Update
-from telegram.ext import ApplicationBuilder, CommandHandler, MessageHandler, filters, ContextTypes
+from telegram.ext import (
+    ApplicationBuilder,
+    CommandHandler,
+    MessageHandler,
+    filters,
+    ContextTypes,
+)
 
 load_dotenv()
 
-TELEGRAM_TOKEN = os.environ["TELEGRAM_TOKEN"]
-REPL_URL = os.getenv("REPL_URL", "http://localhost:8000")
 
-last_photo: dict[int, str] = {}
-last_audio: dict[int, str] = {}
+# ---------------------------------------------------------------------------
+# Type machinery
+# ---------------------------------------------------------------------------
 
-
-async def hello(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    assert update.message is not None
-    async with httpx.AsyncClient(timeout=5) as client:
-        try:
-            response = await client.get(f"{REPL_URL}/health")
-            data = response.json()
-            status = data.get("status", "unknown")
-            await update.message.reply_text(f"REPL service is up. Status: {status}")
-        except Exception as e:
-            await update.message.reply_text(f"REPL service is unreachable: {e}")
+A = TypeVar("A")
+E = TypeVar("E")
 
 
-async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    assert update.message is not None
-    assert update.message.from_user is not None
-    photo = update.message.photo[-1]  # largest available size
-    file = await context.bot.get_file(photo.file_id)
-    photo_bytes = await file.download_as_bytearray()
+@dataclass(frozen=True)
+class Ok(Generic[A]):
+    value: A
 
-    async with httpx.AsyncClient(timeout=30) as client:
-        try:
+
+@dataclass(frozen=True)
+class Err(Generic[E]):
+    error: E
+
+
+# ---------------------------------------------------------------------------
+# Domain types
+# ---------------------------------------------------------------------------
+
+@dataclass(frozen=True)
+class BotConfig:
+    token: str
+    repl_url: str
+
+
+@dataclass(frozen=True)
+class SessionState:
+    """Holds mutable session dicts at the I/O boundary.
+
+    The dataclass is frozen (no rebinding of attributes); the dicts it
+    carries are mutated at the outermost application layer — bot handlers —
+    which is the only place where side effects are permitted.
+    """
+    last_photo: dict[int, str]
+    last_audio: dict[int, str]
+
+
+@dataclass(frozen=True)
+class HealthStatus:
+    status: str
+
+
+@dataclass(frozen=True)
+class PhotoUpload:
+    photo_id: str
+
+
+@dataclass(frozen=True)
+class AudioUpload:
+    audio_id: str
+
+
+@dataclass(frozen=True)
+class OcrResult:
+    text: str
+
+
+@dataclass(frozen=True)
+class TranscriptionResult:
+    text: str
+
+
+# ---------------------------------------------------------------------------
+# Configuration
+# ---------------------------------------------------------------------------
+
+def _load_config() -> BotConfig:
+    return BotConfig(
+        token=os.environ["TELEGRAM_TOKEN"],
+        repl_url=os.getenv("REPL_URL", "http://localhost:8000"),
+    )
+
+
+# ---------------------------------------------------------------------------
+# HTTP client morphisms  (async I/O at the boundary — fallible via Result)
+# ---------------------------------------------------------------------------
+
+async def _fetch_health(repl_url: str) -> Ok[HealthStatus] | Err[Exception]:
+    try:
+        async with httpx.AsyncClient(timeout=5) as client:
+            response = await client.get(f"{repl_url}/health")
+            data: dict[str, str] = response.json()
+            return Ok(HealthStatus(status=data.get("status", "unknown")))
+    except Exception as exc:
+        return Err(exc)
+
+
+async def _upload_photo(
+    repl_url: str, file_id: str, photo_bytes: bytes
+) -> Ok[PhotoUpload] | Err[Exception]:
+    try:
+        async with httpx.AsyncClient(timeout=30) as client:
             response = await client.post(
-                f"{REPL_URL}/photos/upload",
-                files={"file": (f"{photo.file_id}.jpg", bytes(photo_bytes), "image/jpeg")},
+                f"{repl_url}/photos/upload",
+                files={"file": (f"{file_id}.jpg", photo_bytes, "image/jpeg")},
             )
-            data = response.json()
-            photo_id = data.get("photo_id", "unknown")
-            last_photo[update.message.from_user.id] = photo_id
-            await update.message.reply_text(
-                f"Photo uploaded. ID: {photo_id}\n\nUse /ocr to extract text from this photo."
-            )
-        except Exception as e:
-            await update.message.reply_text(f"Failed to upload photo: {e}")
+            data: dict[str, str] = response.json()
+            return Ok(PhotoUpload(photo_id=data.get("photo_id", "unknown")))
+    except Exception as exc:
+        return Err(exc)
 
 
-async def handle_voice(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    assert update.message is not None
-    assert update.message.voice is not None
-    assert update.message.from_user is not None
-    file = await context.bot.get_file(update.message.voice.file_id)
-    audio_bytes = await file.download_as_bytearray()
-
-    async with httpx.AsyncClient(timeout=30) as client:
-        try:
+async def _upload_audio(
+    repl_url: str, file_id: str, audio_bytes: bytes
+) -> Ok[AudioUpload] | Err[Exception]:
+    try:
+        async with httpx.AsyncClient(timeout=30) as client:
             response = await client.post(
-                f"{REPL_URL}/audio/upload",
-                files={"file": (f"{update.message.voice.file_id}.ogg", bytes(audio_bytes), "audio/ogg")},
+                f"{repl_url}/audio/upload",
+                files={"file": (f"{file_id}.ogg", audio_bytes, "audio/ogg")},
             )
-            data = response.json()
-            audio_id = data.get("audio_id", "unknown")
-            last_audio[update.message.from_user.id] = audio_id
-            await update.message.reply_text(
-                f"Voice message uploaded. ID: {audio_id}\n\nUse /transcribe to transcribe it."
-            )
-        except Exception as e:
-            await update.message.reply_text(f"Failed to upload voice message: {e}")
+            data: dict[str, str] = response.json()
+            return Ok(AudioUpload(audio_id=data.get("audio_id", "unknown")))
+    except Exception as exc:
+        return Err(exc)
 
 
-async def transcribe(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    assert update.message is not None
-    assert update.message.from_user is not None
-    audio_id = last_audio.get(update.message.from_user.id)
-    if not audio_id:
-        await update.message.reply_text("No voice message uploaded yet. Send a voice message first.")
-        return
-
-    async with httpx.AsyncClient(timeout=120) as client:
-        try:
-            response = await client.get(f"{REPL_URL}/audio/{audio_id}/transcribe")
-            data = response.json()
-            text = data.get("text", "").strip()
-            await update.message.reply_text(text if text else "No speech detected.")
-        except Exception as e:
-            await update.message.reply_text(f"Transcription failed: {e}")
+async def _run_ocr(repl_url: str, photo_id: str) -> Ok[OcrResult] | Err[Exception]:
+    try:
+        async with httpx.AsyncClient(timeout=30) as client:
+            response = await client.get(f"{repl_url}/photos/{photo_id}/analyse/ocr")
+            data: dict[str, str] = response.json()
+            return Ok(OcrResult(text=data.get("text", "").strip()))
+    except Exception as exc:
+        return Err(exc)
 
 
-async def ocr(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    assert update.message is not None
-    assert update.message.from_user is not None
-    photo_id = last_photo.get(update.message.from_user.id)
-    if not photo_id:
-        await update.message.reply_text("No photo uploaded yet. Send a photo first.")
-        return
+async def _run_transcription(
+    repl_url: str, audio_id: str
+) -> Ok[TranscriptionResult] | Err[Exception]:
+    try:
+        async with httpx.AsyncClient(timeout=120) as client:
+            response = await client.get(f"{repl_url}/audio/{audio_id}/transcribe")
+            data: dict[str, str] = response.json()
+            return Ok(TranscriptionResult(text=data.get("text", "").strip()))
+    except Exception as exc:
+        return Err(exc)
 
-    async with httpx.AsyncClient(timeout=30) as client:
-        try:
-            response = await client.get(f"{REPL_URL}/photos/{photo_id}/analyse/ocr")
-            data = response.json()
-            text = data.get("text", "").strip()
-            await update.message.reply_text(text if text else "No text found in the image.")
-        except Exception as e:
-            await update.message.reply_text(f"OCR failed: {e}")
 
+# ---------------------------------------------------------------------------
+# Handler factories  (close over BotConfig and SessionState)
+# ---------------------------------------------------------------------------
+
+Handler = Callable[[Update, ContextTypes.DEFAULT_TYPE], Awaitable[None]]
 
 HELP_TEXT = (
     "Available commands:\n\n"
@@ -119,6 +178,110 @@ HELP_TEXT = (
 )
 
 
+def make_hello_handler(config: BotConfig) -> Handler:
+    async def handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+        assert update.message is not None
+        match await _fetch_health(config.repl_url):
+            case Ok(value=health):
+                await update.message.reply_text(
+                    f"REPL service is up. Status: {health.status}"
+                )
+            case Err(error=exc):
+                await update.message.reply_text(f"REPL service is unreachable: {exc}")
+
+    return handler
+
+
+def make_photo_handler(config: BotConfig, state: SessionState) -> Handler:
+    async def handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+        assert update.message is not None
+        assert update.message.from_user is not None
+        photo = update.message.photo[-1]
+        file = await context.bot.get_file(photo.file_id)
+        photo_bytes = bytes(await file.download_as_bytearray())
+
+        match await _upload_photo(config.repl_url, photo.file_id, photo_bytes):
+            case Ok(value=upload):
+                state.last_photo[update.message.from_user.id] = upload.photo_id
+                await update.message.reply_text(
+                    f"Photo uploaded. ID: {upload.photo_id}\n\n"
+                    "Use /ocr to extract text from this photo."
+                )
+            case Err(error=exc):
+                await update.message.reply_text(f"Failed to upload photo: {exc}")
+
+    return handler
+
+
+def make_voice_handler(config: BotConfig, state: SessionState) -> Handler:
+    async def handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+        assert update.message is not None
+        assert update.message.voice is not None
+        assert update.message.from_user is not None
+        file = await context.bot.get_file(update.message.voice.file_id)
+        audio_bytes = bytes(await file.download_as_bytearray())
+
+        match await _upload_audio(
+            config.repl_url, update.message.voice.file_id, audio_bytes
+        ):
+            case Ok(value=upload):
+                state.last_audio[update.message.from_user.id] = upload.audio_id
+                await update.message.reply_text(
+                    f"Voice message uploaded. ID: {upload.audio_id}\n\n"
+                    "Use /transcribe to transcribe it."
+                )
+            case Err(error=exc):
+                await update.message.reply_text(
+                    f"Failed to upload voice message: {exc}"
+                )
+
+    return handler
+
+
+def make_ocr_handler(config: BotConfig, state: SessionState) -> Handler:
+    async def handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+        assert update.message is not None
+        assert update.message.from_user is not None
+
+        match state.last_photo.get(update.message.from_user.id):
+            case None:
+                await update.message.reply_text(
+                    "No photo uploaded yet. Send a photo first."
+                )
+            case photo_id:
+                match await _run_ocr(config.repl_url, photo_id):
+                    case Ok(value=result):
+                        await update.message.reply_text(
+                            result.text if result.text else "No text found in the image."
+                        )
+                    case Err(error=exc):
+                        await update.message.reply_text(f"OCR failed: {exc}")
+
+    return handler
+
+
+def make_transcribe_handler(config: BotConfig, state: SessionState) -> Handler:
+    async def handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+        assert update.message is not None
+        assert update.message.from_user is not None
+
+        match state.last_audio.get(update.message.from_user.id):
+            case None:
+                await update.message.reply_text(
+                    "No voice message uploaded yet. Send a voice message first."
+                )
+            case audio_id:
+                match await _run_transcription(config.repl_url, audio_id):
+                    case Ok(value=result):
+                        await update.message.reply_text(
+                            result.text if result.text else "No speech detected."
+                        )
+                    case Err(error=exc):
+                        await update.message.reply_text(f"Transcription failed: {exc}")
+
+    return handler
+
+
 async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     assert update.message is not None
     await update.message.reply_text(HELP_TEXT)
@@ -129,15 +292,22 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     await update.message.reply_text("Hello! " + HELP_TEXT)
 
 
+# ---------------------------------------------------------------------------
+# Entry point
+# ---------------------------------------------------------------------------
+
 def main() -> None:
-    app = ApplicationBuilder().token(TELEGRAM_TOKEN).build()
-    app.add_handler(CommandHandler("hello", hello))
-    app.add_handler(CommandHandler("ocr", ocr))
-    app.add_handler(CommandHandler("transcribe", transcribe))
+    config = _load_config()
+    state = SessionState(last_photo={}, last_audio={})
+
+    app = ApplicationBuilder().token(config.token).build()
+    app.add_handler(CommandHandler("hello", make_hello_handler(config)))
+    app.add_handler(CommandHandler("ocr", make_ocr_handler(config, state)))
+    app.add_handler(CommandHandler("transcribe", make_transcribe_handler(config, state)))
     app.add_handler(CommandHandler("help", help_command))
     app.add_handler(CommandHandler("start", start))
-    app.add_handler(MessageHandler(filters.PHOTO, handle_photo))
-    app.add_handler(MessageHandler(filters.VOICE, handle_voice))
+    app.add_handler(MessageHandler(filters.PHOTO, make_photo_handler(config, state)))
+    app.add_handler(MessageHandler(filters.VOICE, make_voice_handler(config, state)))
     print("Bot is running. Press Ctrl+C to stop.")
     app.run_polling()
 
