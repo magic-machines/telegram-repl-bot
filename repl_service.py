@@ -177,6 +177,7 @@ def analyse_ocr(photo_id: str) -> dict[str, str]:
             image = _preprocess(_correct_rotation(Image.open(first)))
             text: str = pytesseract.image_to_string(image, config="--psm 11 --oem 3")
             return {"photo_id": photo_id, "text": text}
+    raise HTTPException(status_code=500, detail="Unreachable")
 
 
 @app.post("/audio/upload")
@@ -195,6 +196,7 @@ def transcribe_audio(audio_id: str) -> dict[str, str]:
         case [first, *_]:
             raw: dict[str, object] = _whisper_model.transcribe(str(first))  # type: ignore[assignment]
             return {"audio_id": audio_id, "text": str(raw.get("text", ""))}
+    raise HTTPException(status_code=500, detail="Unreachable")
 
 
 if __name__ == "__main__":

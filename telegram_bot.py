@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import os
 from dataclasses import dataclass
-from typing import TypeVar, Generic, Callable, Awaitable
+from typing import TypeVar, Generic, Callable, Coroutine, Any
 
 import httpx
 from dotenv import load_dotenv
@@ -164,7 +164,7 @@ async def _run_transcription(
 # Handler factories  (close over BotConfig and SessionState)
 # ---------------------------------------------------------------------------
 
-Handler = Callable[[Update, ContextTypes.DEFAULT_TYPE], Awaitable[None]]
+Handler = Callable[[Update, ContextTypes.DEFAULT_TYPE], Coroutine[Any, Any, None]]
 
 HELP_TEXT = (
     "Available commands:\n\n"
